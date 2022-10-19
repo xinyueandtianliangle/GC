@@ -1,0 +1,253 @@
+# Study population
+
+```{r study population,include=F}
+dat$event1=(dat$event=='Cancer')+0
+library(Epi)
+set.seed(2022)
+datcc=ccwc(entry=date_incl, exit=exit_date, fail=event1, origin=0, controls=30, match=list(town,ageC_incl,date_incl,sex),include=list(ID,event,VCA_incl,EBNA_incl,death_date,migrate_date,cancer_type_cn,diag_cancer_date,diag_GC_date,site_GC,histology_GC_EN,age_incl,EBNA_inclC,VCA_inclC,Prob,Risk,exit_date,VCA_NA1,intv), data=dat, silent=FALSE)
+```
+
+
+
+# Years between dates of diagnosis and sampling
+
+```{r interval plotbr,include=F}
+p=ggplot(data = datcc[datcc$Fail==1,],aes(x=reorder(Map,intv),y=intv))+
+geom_bar(stat="identity",color='grey94',width = 0.5)+
+    labs(y='Years of anti-EBV antidody tests before diagnosis',x='Row number of cases',caption="Median (range): 3.04 (0.04, 7.59)")+
+theme_classic()+
+  scale_y_continuous(expand = c(0, 0))+
+  theme(plot.caption.position = "plot",
+        plot.caption = element_text(hjust = 1))+
+  coord_flip()
+
+```
+
+
+# Table 1
+```{r table1,include=F}
+label(datcc$ageC_incl)<- "Age at recruitment, N (%)"
+label(datcc$EBNA_inclC) <- "EBNA1-IgA, N (%)"
+label(datcc$VCA_inclC)<- "VCA-IgA, N (%)"
+label(datcc$sex)<-'Sex, N (%)'
+label(datcc$town)<-'Town, N (%)'
+label(datcc$EBNA_incl)<-'EBNA-IgA, rOD'
+label(datcc$VCA_incl)<-'VCA-IgA, rOD'
+label(datcc$Risk)<- 'Serological risk (combination of VCA-IgA and EBNA-IgA), N (%)'
+label(datcc$VCA_NA1)<- 'VCA-IgA and EBNA-IgA, N (%)'
+
+
+
+
+t1=table1::table1(~sex+ageC_incl+town+EBNA_inclC+EBNA_incl+VCA_inclC+VCA_incl+Risk+VCA_NA1|event, data=datcc,overall="Total",rowlabelhead='Characteristics',render.continuous=c("", "Median (Min, Max)"), rounding.fn=round_pad, digits=2)%>%  read_html(.) %>% html_table(fill=TRUE) %>% as.data.frame()
+
+
+
+t1p=flextable(t1) %>% set_header_labels(.,Var.1='',Cancer.N..18.='Gastric cancer \n (N=18)',Censor.N.444.='Controls \n (N=444)',Total.N.462.='Total \n (N=462)') %>% theme_booktabs %>% autofit %>%  fix_border_issues %>% bold(part='header') %>%  set_caption(caption = "Table 1. Baseline characteristics in gastric cancer cases and controls") %>%padding(i=setdiff(1:nrow(t1) , c(which(t1$Cancer.N..18.==''))), j=1, padding.left=20)%>% add_footer_lines('Abbreviations: rOD, relative optical density.') %>%  valign( valign = "bottom", part = "header")
+```
+
+```{r table1 out, results='hold'}
+t1p
+#print(t1p,preview = 'docx')
+
+```
+
+# Boxplot (First impression)
+```{r boxplot primary,include=F}
+library(ggpubr)
+library(ggprism)
+datcc=datcc %>% mutate(event1=ifelse(event=='Censor','Control',event))
+p1=ggboxplot(data =datcc,x='event1',y='EBNA_incl')+  
+  labs(x='',y='EBNA-IgA1 (rOD)')+
+   theme(legend.position='none',axis.title.y = element_text( face="bold", colour = "black"))+
+  scale_y_sqrt(expand = expansion(mult = c(0,0.1)))+
+  scale_color_manual(values=pal_nejm('default')(2))+
+  expand_limits(y = 0)+# Force the origin start at 0.
+ theme_prism()+
+  stat_compare_means(
+        aes(label =  sprintf('Wilcoxon, p = %#.3f',as.numeric(..p.format..))), 
+      method = "wilcox.test", 
+      paired = F,
+      label.x = 1.5,
+       #label.y = 6
+    )
+
+p2=ggboxplot(data =datcc,x='event1',y='VCA_incl')+  
+  labs(x='',y='VCA-IgA (rOD)')+
+   theme(legend.position='none',axis.title.y = element_text( face="bold", colour = "black"))+
+  scale_y_sqrt(expand = expansion(mult = c(0,0.1)))+
+  scale_color_manual(values=pal_nejm('default')(2))+
+  expand_limits(y = 0)+# Force the origin start at 0.
+  theme_prism()+
+  stat_compare_means(
+        aes(label =  sprintf('Wilcoxon, p = %#.3f',as.numeric(..p.format..))), 
+      method = "wilcox.test", 
+      paired = F,
+      label.x = 1.5,
+       #label.y = 6
+    )
+
+p=ggarrange(p1,p2,labels = "AUTO", # labels
+                  legend = "none", # legend position
+                  align = "hv", # Align them both, horizontal and vertical
+                  nrow = 1,ncol = 2)
+
+
+```
+
+
+
+# Conditional logistic regression
+## rOD=1 as cutoff 
+```{r clogit,include=F}
+# Binary exposures
+clogit_fitC <-function(Ab,Ab_long,ad_var){
+ hr=clogit(as.formula(paste("Fail~ ", Ab,'+strata(Set)',ad_var)), data = datcc) %>% publish(.,factor.reference = "extraline") %>% .$rawTable %>% mutate(OR=formatCI(x=.$HazardRatio,lower=.$Lower,upper=.$Upper,format="(l,u)",show.x=TRUE)) %>% .[1:length(unique(datcc[,Ab])),c(2,7)] %>% add_row(.before = 1,Units=Ab_long,OR='') %>% add_column(.after =1,Cases=table1( as.formula(paste('~' ,Ab,'|event')), data=datcc) %>%  read_html(.) %>% html_table(fill=TRUE) %>% as.data.frame() %>% .[,2]) %>% add_column(.after = 2,Controls= table1( as.formula(paste('~',Ab,'|event')), data=datcc) %>%  read_html(.) %>% html_table(fill=TRUE) %>% as.data.frame() %>% .[,3])%>% {.[2,4]='ref';.}
+return(hr)
+}
+
+NA1_uniC=clogit_fitC(Ab='EBNA_inclC',Ab_long='EBNA1-IgA',ad_var='')
+VCA_uniC=clogit_fitC(Ab='VCA_inclC',Ab_long='VCA-IgA',ad_var='')
+Risk_uniC=clogit_fitC(Ab='Risk',Ab_long='Serological risk (combination of VCA-IgA and EBNA-IgA)',ad_var='')
+navca_uniC=clogit_fitC(Ab='VCA_NA1',Ab_long='VCA-IgA and EBNA-IgA',ad_var='')
+
+NA1_adC=clogit_fitC(Ab='EBNA_inclC',Ab_long='EBNA1-IgA',ad_var='+age_incl')
+VCA_adC=clogit_fitC(Ab='VCA_inclC',Ab_long='VCA-IgA',ad_var='+age_incl')
+Risk_adC=clogit_fitC(Ab='Risk',Ab_long='NPC risk',ad_var='+age_incl')
+navca_adC=clogit_fitC(Ab='VCA_NA1',Ab_long='VCA-IgA and EBNA-IgA',ad_var='+age_incl')
+
+or2=bind_cols(navca_uniC,navca_adC[,4]) 
+or2=or2%>% flextable() %>% set_header_labels(.,Units='',OR='Crude OR (95% CI)',...5='Adjusted OR (95% CI)')  %>% bold(part='header') %>%  set_caption(caption = "Table 2. Associations of combined anti-EBV antibodies with Odds ratio (OR) of gastric cancer risk") %>%padding(i=setdiff(1:nrow(or2) , c(which(or2$Cases==''))), j=1, padding.left=20)  %>% theme_booktabs %>% autofit %>%  fix_border_issues%>%  add_footer_lines('Abbreviations: EBV, Epstein-Barr virus; rOD, relative optical density; EBNA1: Epstein–Barr nuclear antigen 1; VCA: capsid antigen; IgA: Immunoglobulin A.')%>% footnote(i=1,j=5,value = as_paragraph(c('OR was adjusted by age (numeric) at initial recruitment.')),ref_symbols = c('†'),part = 'header')%>%  valign( valign = "bottom", part = "header") 
+
+# Numeric exposures
+clogit_fitN=function(Ab_n,ad_var,Ab_long)
+{hrN=clogit(as.formula(paste("Fail~ ", Ab_n,'+strata(Set)',ad_var)), data = datcc) %>% publish(.,factor.reference = "extraline") %>% .$rawTable %>% mutate(OR=formatCI(x=.$HazardRatio,lower=.$Lower,upper=.$Upper,format="(l,u)",show.x=TRUE)) %>% .[1,c(2,7)] %>%  add_column(.before = 2,Cases='') %>% add_column(.before = 3,Controls='') %>% {.[1,1]=Ab_long;.}
+  return(hrN)
+}
+NA1_uniN=clogit_fitN(Ab_n='EBNA_incl',ad_var='',Ab_long='EBNA1-IgA, rOD')
+NA1_adN=clogit_fitN(Ab_n='EBNA_incl',ad_var='+age_incl',Ab_long='EBNA1-IgA, rOD')
+VCA_uniN=clogit_fitN(Ab_n='VCA_incl',ad_var='',Ab_long='VCA-IgA, rOD')
+VCA_adN=clogit_fitN(Ab_n='VCA_incl',ad_var='+age_incl',Ab_long='VCA-IgA, rOD')
+
+
+or1=bind_rows(NA1_uniC,NA1_uniN,VCA_uniC,VCA_uniN,Risk_uniC) %>% bind_cols(OR_ad=c(NA1_adC[,4],NA1_adN[,4],VCA_adC[,4],VCA_adN[,4],Risk_adC[,4]))
+
+t2=flextable(or1) %>% set_header_labels(.,Units='',OR='Crude OR (95% CI)',OR_ad='Adjusted OR (95% CI)')  %>% bold(part='header') %>%  set_caption(caption = "Table 2. Associations of anti-EBV antibodies with Odds ratio (OR) of gastric cancer risk") %>%padding(i=setdiff(1:nrow(or1) , c(which(or1$Cases==''))), j=1, padding.left=20)  %>% theme_booktabs %>% autofit %>%  fix_border_issues%>%  add_footer_lines('Abbreviations: EBV, Epstein-Barr virus; rOD, relative optical density; EBNA1: Epstein–Barr nuclear antigen 1; VCA: capsid antigen; IgA: Immunoglobulin A.')%>% footnote(i=1,j=5,value = as_paragraph(c('OR was adjusted by age (numeric) at initial recruitment.')),ref_symbols = c('†'),part = 'header')%>%  valign( valign = "bottom", part = "header") 
+
+
+
+```
+
+
+
+
+
+
+# Multiple NCC
+```{r loop hr,include=F}
+my_list <- list()  
+for (i in 1:30) {
+  # Density sampling
+  set.seed(i)
+datcc4=ccwc(entry=date_incl, exit=exit_date, fail=event1, origin=0, controls=30, match=list(town,ageC_incl,date_incl,sex),include=list(ID,event,VCA_incl,EBNA_incl,death_date,migrate_date,cancer_type_cn,diag_cancer_date,diag_GC_date,site_GC,histology_GC_EN,age_incl,EBNA_inclC,VCA_inclC), data=dat, silent=FALSE )
+
+clogit_fitN4=function(Ab_n,ad_var,Ab_long)
+{hrN=clogit(as.formula(paste("Fail~ ", Ab_n,'+strata(Set)',ad_var)), data = datcc4) %>% publish(.,factor.reference = "extraline") %>% .$rawTable %>% mutate(OR=formatCI(x=.$HazardRatio,lower=.$Lower,upper=.$Upper,format="(l,u)",show.x=TRUE)) %>% .[1,c(2,7)] %>%  add_column(.before = 2,Cases='') %>% add_column(.before = 3,Controls='') %>% {.[1,1]=Ab_long;.}
+  return(hrN)
+}
+# OR obtain
+NA1_uniN=clogit_fitN4(Ab_n='EBNA_incl',ad_var='',Ab_long='EBNA1-IgA, rOD')
+NA1_adN=clogit_fitN4(Ab_n='EBNA_incl',ad_var='+age_incl',Ab_long='EBNA1-IgA, rOD')
+VCA_uniN=clogit_fitN4(Ab_n='VCA_incl',ad_var='',Ab_long='VCA-IgA, rOD')
+VCA_adN=clogit_fitN4(Ab_n='VCA_incl',ad_var='+age_incl',Ab_long='VCA-IgA, rOD')
+
+clogit_fitC4 <-function(Ab,Ab_long,ad_var){
+ hr=clogit(as.formula(paste("Fail~ ", Ab,'+strata(Set)',ad_var)), data = datcc4) %>% publish(.,factor.reference = "extraline") %>% .$rawTable %>% mutate(OR=formatCI(x=.$HazardRatio,lower=.$Lower,upper=.$Upper,format="(l,u)",show.x=TRUE)) %>% .[1:2,c(2,7)] %>% add_row(.before = 1,Units=Ab_long,OR='') %>% add_column(.after =1,Cases=table1( as.formula(paste('~' ,Ab,'|event')), data=datcc4) %>%  read_html(.) %>% html_table(fill=TRUE) %>% as.data.frame() %>% .[,2]) %>% add_column(.after = 2,Controls= table1( as.formula(paste('~',Ab,'|event')), data=datcc4) %>%  read_html(.) %>% html_table(fill=TRUE) %>% as.data.frame() %>% .[,3])%>% {.[2,4]='ref';.}
+return(hr)
+}
+
+NA1_uniC=clogit_fitC4(Ab='EBNA_inclC',Ab_long='EBNA1-IgA',ad_var='')
+VCA_uniC=clogit_fitC4(Ab='VCA_inclC',Ab_long='VCA-IgA',ad_var='')
+NA1_adC=clogit_fitC4(Ab='EBNA_inclC',Ab_long='EBNA1-IgA',ad_var='+age_incl+sex')
+VCA_adC=clogit_fitC4(Ab='VCA_inclC',Ab_long='VCA-IgA',ad_var='+age_incl+sex')
+
+or4=bind_rows(NA1_uniC,NA1_uniN,VCA_uniC,VCA_uniN) %>% bind_cols(OR_ad=c(NA1_adC[,4],NA1_adN[,4],VCA_adC[,4],VCA_adN[,4]))
+
+ my_list[[i]] <- or4
+}
+
+
+loop_or= do.call(rbind.data.frame,my_list) 
+# save(loop_or,file = 'C:/D/5_EBV_GC_NCC/Output/OR_30loop_table_20220211.Rdata')
+
+tmp=bind_cols(loop_or[seq(4,240,8),],loop_or[seq(8,240,8),]) %>% .[,-c(2:3,7,8)] %>% add_column(.before = 1,Sampling=1:30 %>% as.character())
+
+tmp1=data.frame(Sampling=tmp$Sampling,na1_ad=tmp$OR_ad...5,vca_ad=tmp$OR_ad...10) %>% mutate(na1_hr=str_split(na1_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[1]) %>% as.numeric(),   
+                                                                                             vca_hr=str_split(vca_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[1]) %>% as.numeric()                                                                     ) 
+
+tmp2=tmp1%>% add_row(.after = 30,Sampling='Average', na1_ad=paste0(tmp1$na1_hr %>% stats.default %>% .[["MEAN"]] %>% as.numeric()%>% sprintf(., fmt = '%#.2f'),'(',tmp1$na1_hr %>% stats.default %>% .[["q02.5"]]%>% as.numeric()%>% sprintf(., fmt = "%#.2f"),',',tmp1$na1_hr %>% stats.default %>% .[["q97.5"]]%>% as.numeric()%>% sprintf(., fmt = '%#.2f'),')'),
+             vca_ad= paste0(tmp1$vca_hr %>% stats.default %>% .[["MEAN"]] %>% as.numeric()%>% sprintf(., fmt = '%#.2f'),'(',tmp1$vca_hr %>% stats.default %>% .[["q02.5"]]%>% as.numeric()%>% sprintf(., fmt = "%#.2f"),',',tmp1$vca_hr %>% stats.default %>% .[["q97.5"]]%>% as.numeric()%>% sprintf(., fmt = '%#.2f'),')')  ) %>% mutate(
+                  na1_low=str_split(na1_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[2]) %>% as.numeric(),
+                                                                                             na1_up=str_split(na1_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[3]) %>% as.numeric(),
+                 vca_low=str_split(vca_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[2]) %>% as.numeric(),
+                                                                                             vca_up=str_split(vca_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[3]) %>% as.numeric(),
+                      na1_hr=str_split(na1_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[1]) %>% as.numeric(),   
+                                                                                             vca_hr=str_split(vca_ad, "\\(|\\,|\\)") %>% lapply(.,function(x)x[1]) %>% as.numeric()  
+             )                             
+ # get average odds ratio.
+
+
+
+tmp1$na1_hr %>% stats.default %>% .[["MEAN"]] # 1.959667
+tmp1$na1_hr %>% stats.default %>% .[["q02.5"]]# 1.80725 
+tmp1$na1_hr %>% stats.default %>% .[["q97.5"]]#2.17375 
+
+tmp1$vca_hr %>% stats.default %>% .[["MEAN"]]#2.289
+tmp1$vca_hr %>% stats.default %>% .[["q02.5"]]#1.91725 
+tmp1$vca_hr %>% stats.default %>% .[["q97.5"]]#3.0185 
+
+
+# For forestplot
+```
+
+```{r forest loop,include=F }
+tabletext <- cbind(
+  c('','Sampling', tmp2$Sampling),
+  c('EBNA1-IgA','OR (95%CI)',tmp2$na1_ad),
+  c('VCA-IgA','OR (95%CI)',tmp2$vca_ad)
+ )
+
+tiff("C:/D/5_EBV_GC_NCC/Output/forestplot_30sampling_20220501.tiff", units = "in", width = 9, height = 14, res = 300)
+forestplot(tabletext,
+           hrzl_lines = list("3" = gpar(lwd = 1, columns = 1:4, col = "black"),
+                             "1"= gpar(lwd = 1, columns = 1:4, col = "black"),
+                             "34"= gpar(lwd = 1, columns = 1:4, col = "black")),
+            mean=cbind(c(NA,NA,tmp2$na1_hr),c(NA,NA,tmp2$vca_hr)),
+   lower=cbind(c(NA,NA,tmp2$na1_low),c(NA,NA,tmp2$vca_low)),
+   upper=cbind(c(NA,NA,tmp2$na1_up),c(NA,NA,tmp2$vca_up)),
+            xlog = T, 
+            col = fpColors(box = pal_nejm()(2),
+                        line = pal_nejm()(2),
+                          hrz_lines = "#444444"),
+           xlab = "ORs (95%CI)",
+            boxsize = .1,
+             legend = c("EBNA1-IgA", "VCA-IgA"),
+            legend_args = fpLegend(pos = list(x = 1.3, y = 0.5)),
+   #title='Odds ratios (HRs) in relation to EBV-related antibodies in serum',
+          graphwidth=unit(30,'mm'),
+   colgap = unit(10, "mm"),
+                  # line.margin = unit(0.3, "mm"),
+                   lineheight = unit(0.4, "in"),
+                   txt_gp = fpTxtGp(label = gpar(cex = 1),
+                                    ticks = gpar(cex = 1)),
+                   align = c("l", "c", "c", "c"),
+                   zero = 1,
+
+                  mar = unit(c(0, 0, 0, 0), "in"))
+   
+dev.off()
+```
+
+
+
+
