@@ -217,7 +217,7 @@ tabletext <- cbind(
   c('VCA-IgA','OR (95%CI)',tmp2$vca_ad)
  )
 
-tiff("C:/D/5_EBV_GC_NCC/Output/forestplot_30sampling_20220501.tiff", units = "in", width = 9, height = 14, res = 300)
+
 forestplot(tabletext,
            hrzl_lines = list("3" = gpar(lwd = 1, columns = 1:4, col = "black"),
                              "1"= gpar(lwd = 1, columns = 1:4, col = "black"),
@@ -244,8 +244,7 @@ forestplot(tabletext,
                    zero = 1,
 
                   mar = unit(c(0, 0, 0, 0), "in"))
-   
-dev.off()
+
 ```
 
 
